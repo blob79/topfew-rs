@@ -1,6 +1,7 @@
+use anyhow::Context;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
-use std::path::Path;
+use std::io::{BufRead, BufReader, Cursor, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 
 fn split(chunk: u64, size: u64) -> Vec<u64> {
     let e = size / chunk + 1.min(size % chunk);
@@ -76,18 +77,36 @@ where
     }
 }
 
-pub struct Chunks<'a> {
-    path: &'a Path,
+pub struct Files {
+    path: PathBuf,
+}
+
+impl Iterator for Files {
+    type Item = anyhow::Result<Cursor<memmap::Mmap>>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let bytes: anyhow::Result<memmap::Mmap> = unsafe {
+            File::open(&self.path)
+                .and_then(|f| memmap::MmapOptions::new().map(&f))
+                .with_context(|| "Failed")
+        };
+        Some(bytes.map(|b| Cursor::new(b)).with_context(|| "Failed"))
+    }
+}
+
+pub struct Chunks {
+    path: Files,
     current: u64,
     starts: std::vec::IntoIter<u64>,
     chunk: usize,
     size: u64,
 }
 
-impl Chunks<'_> {
+impl Chunks {
     pub fn new(path: &Path, chunk: usize, size: u64) -> Chunks {
         Chunks {
-            path,
+            path: Files {
+                path: path.to_owned(),
+            },
             current: 0,
             starts: split(chunk as u64, size).into_iter(),
             chunk,
@@ -96,12 +115,12 @@ impl Chunks<'_> {
     }
 }
 
-impl Iterator for Chunks<'_> {
-    type Item = Chunk<BufReader<File>>;
+impl Iterator for Chunks {
+    type Item = Chunk<BufReader<Cursor<memmap::Mmap>>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(start) = self.starts.next() {
-            if let Ok(f) = File::open(&self.path) {
+            if let Some(Ok(f)) = self.path.next() {
                 let buf = BufReader::new(f);
                 if let Ok((chunk, position)) =
                     Chunk::new(buf, self.chunk, self.current, start, self.size)

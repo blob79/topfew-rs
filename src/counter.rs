@@ -16,7 +16,7 @@ impl Counter {
         }
     }
 
-    pub fn counts(self) -> HashMap<String, u64> {
+    pub fn counts(self) -> AHashMap<String, u64> {
         self.counts
     }
 
